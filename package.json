@@ -4,7 +4,7 @@
   "description": "Pimp Bunny Stremio addon: browse, search and stream direct MP4 sources with aggressive server-side caching.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "npm run start:env",
     "start:env": "node --env-file=.env server.js"
   },
   "dependencies": {
