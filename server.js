@@ -183,6 +183,13 @@ app.get("/", (req, res) => {
     }
     footer a { color: #a9adc0; text-decoration: none; }
     footer a:hover { color: #fff; }
+    .disclaimer {
+      flex-basis: 100%; padding: 15px 17px; border: 1px solid rgba(255, 138, 61, 0.46);
+      border-radius: 12px; color: #ffd5ad; background: rgba(255, 138, 61, 0.11);
+      font-size: 13px; line-height: 1.55; font-weight: 600;
+    }
+    .disclaimer strong { color: #fff0df; }
+    .disclaimer a { color: #ffbd80; text-decoration: underline; }
     .warn { color: #ffbc75; }
     @media (max-width: 640px) { .hero { padding-top: 48px; } }
   </style>
@@ -280,6 +287,10 @@ app.get("/", (req, res) => {
     </section>
 
     <footer>
+      <div class="disclaimer">
+        <strong>Important disclaimer:</strong> Pimp Bunny does not host, upload, store, distribute, or control any video content.
+        All content metadata and stream sources are provided by <a href="https://pornapi.sbs/" target="_blank" rel="noopener noreferrer">PornAPI</a>.
+      </div>
       <span>Pimp Bunny Stremio Addon · v${version} · unofficial, not affiliated with PornAPI or Stremio · 18+ only</span>
       <span><a href="/manifest.json">Manifest</a> · <a href="/health">Health</a></span>
     </footer>

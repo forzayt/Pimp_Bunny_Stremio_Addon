@@ -36,12 +36,14 @@ const DAY = 24 * HOUR;
 
 // Cache TTLs (fresh window, then optional stale window for upstream failures)
 const TTL = {
-  catalogNew: 10 * MINUTE,
-  catalogPopular: 30 * MINUTE,
-  catalog4k: 30 * MINUTE,
-  catalogGenre: 3 * HOUR,
-  search: 12 * HOUR,
-  meta: 24 * HOUR,
+  // Catalogue data changes less often than stream access tokens. Keeping these
+  // for a week minimizes upstream requests and protects the rate-limit budget.
+  catalogNew: 7 * DAY,
+  catalogPopular: 7 * DAY,
+  catalog4k: 7 * DAY,
+  catalogGenre: 7 * DAY,
+  search: 7 * DAY,
+  meta: 7 * DAY,
   metaStale: 30 * DAY,
   stream: 2 * HOUR,
   streamStale: 30 * MINUTE,
@@ -582,7 +584,7 @@ builder.defineCatalogHandler(async ({ type, id, extra = {} }) => {
       const items = await collectSearch(query, skip, CATALOG_PAGE_SIZE);
       rememberItems(items);
       log(`search "${query}" skip=${skip} -> ${items.length} results`);
-      return { metas: items.map(toCatalogMeta), cacheMaxAge: 3600 };
+      return { metas: items.map(toCatalogMeta), cacheMaxAge: 7 * 24 * 60 * 60 };
     }
 
     const def = CATALOG_DEFS[id];
@@ -594,7 +596,7 @@ builder.defineCatalogHandler(async ({ type, id, extra = {} }) => {
     const items = await collectVideos(params, skip, CATALOG_PAGE_SIZE, def.ttl);
     rememberItems(items);
     log(`catalog ${id} genre="${genre}" skip=${skip} -> ${items.length} items`);
-    return { metas: items.map(toCatalogMeta), cacheMaxAge: 600 };
+    return { metas: items.map(toCatalogMeta), cacheMaxAge: 7 * 24 * 60 * 60 };
   } catch (error) {
     warn(`catalog ${id} failed: ${error.message}`);
     return { metas: [] };
@@ -622,7 +624,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
   if (!videoId) return { meta: null };
 
   try {
-    return { meta: await getMeta(videoId), cacheMaxAge: 86400 };
+    return { meta: await getMeta(videoId), cacheMaxAge: 7 * 24 * 60 * 60 };
   } catch (error) {
     warn(`meta ${id} failed: ${error.message}`);
     return { meta: null };

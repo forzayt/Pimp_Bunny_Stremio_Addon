@@ -13,8 +13,8 @@ Built with the [Stremio Addon SDK](https://github.com/Stremio/stremio-addon-sdk)
 - **Meta**: title, poster/background, description, release year, runtime, tags, cast and studio.
 - **Streams**: one direct MP4 stream per available quality (4K, 720p, 480p, …), seekable and
   playable natively in Stremio on desktop, mobile and TV.
-- **Cache-first**: catalog, metadata, search and stream lookups are cached server-side with
-  stale-on-error fallback, so the rate-limited PornAPI is hit as little as possible.
+- **Cache-first**: catalog, metadata, and search lookups are cached for seven days; stream URLs
+  remain cached for two hours so playback links stay fresh. Stale-on-error fallback further reduces upstream traffic.
 - **No bandwidth cost**: video bytes go straight from PornAPI's CDN to the player; this server
   only returns metadata and URLs.
 
@@ -67,18 +67,74 @@ On Node 20.6+ you can put the key in `.env` (copy `.env.example`) and run `npm r
 | `GET /health` | Upstream reachability, rate-limit headers and cache stats. |
 | `GET /debug/video/ID` | Resolved meta + streams for a video (debugging). |
 
-## How it works
+## How the platform works
 
-1. **Catalog / search** → cached PornAPI `/videos` and `/search` responses, mapped to Stremio
-   metas. Catalog pages are cached for 10 minutes to 3 hours depending on the catalog.
-2. **Meta** → served from the catalog seed when possible, otherwise `/videos/{id}`, cached for
-   24 hours (stale for 30 days).
-3. **Streams** → the API only exposes an iframe, so the addon fetches the `?vl_embed=` page,
-   parses its `CFG.sources` block and returns the direct `*.workers.dev/...mp4` URLs.
-   URLs are cached for 2 hours (tokens live ~6 hours), so repeated plays do not reload the embed.
-4. **Rate limits** → `x-ratelimit-*` headers are tracked and a `429` engages a cooldown window
-   based on `Retry-After` / `x-ratelimit-reset`; cached (even slightly stale) data keeps serving
-   in the meantime.
+Pimp Bunny is an **indexing and integration layer**, not a video host. Its purpose is to teach
+how a Stremio addon can connect a catalogue provider to the Stremio platform while keeping media
+delivery separate from the addon's own server.
+
+### Network request flow
+
+```text
+Stremio client
+    │  catalog, metadata, and stream requests
+    ▼
+Pimp Bunny / Express server
+    │  cached REST and embed lookups
+    ▼
+PornAPI API and embed page
+    │  metadata and time-limited direct media URLs
+    ▼
+PornAPI CDN ─────────────────────────────────────────► Stremio player
+                 video bytes go directly to the player
+```
+
+The addon server handles the control plane: it returns catalogue items, metadata, and direct
+stream URLs. The video data does **not** pass through this server. Once Stremio receives a media
+URL, the player downloads it from the upstream provider's CDN.
+
+### What happens when someone uses the addon
+
+1. **Install and discovery** — Stremio downloads `/manifest.json`. The manifest identifies the
+   addon, its catalogues, supported media type, and the available `catalog`, `meta`, and `stream`
+   resources.
+2. **Browse or search** — Stremio requests a catalogue route. Pimp Bunny calls PornAPI's
+   `/videos` or `/search` endpoint, maps the returned records into Stremio's `meta` format, and
+   returns posters, titles, descriptions, tags, and other preview information.
+3. **Open a title** — Stremio requests its metadata route. The addon first reuses the catalogue
+   record it already saved; only a cache miss requires an upstream `/videos/{id}` request.
+4. **Press play** — Stremio requests the stream route. The addon reads the upstream embed page,
+   extracts the available quality URLs, and sends those URLs back as stream choices. Stremio then
+   plays the selected URL directly from the upstream CDN.
+
+### Reliability and caching
+
+- **Catalogues and searches** are cached for seven days and can use a seven-day stale fallback if
+  the upstream service is temporarily unavailable.
+- **Metadata** is cached for seven days and can be served stale for up to 30 days during an
+  upstream outage.
+- **Stream URLs** are cached for two hours even though their upstream tokens typically last longer;
+  this refreshes links before they are likely to expire.
+- **Rate limiting** is observed through `x-ratelimit-*` headers. When the upstream returns `429`,
+  the addon backs off and can continue serving eligible cached data.
+
+This arrangement lowers upstream traffic, improves repeat-request latency, and avoids proxying
+large video files through the addon's infrastructure.
+
+### Platform responsibilities
+
+| Component | Responsibility |
+| --- | --- |
+| Stremio | Displays catalogues, presents metadata, and plays the selected stream. |
+| Pimp Bunny | Translates Stremio requests into upstream lookups; caches and returns metadata and stream URLs. |
+| PornAPI | Provides the catalogue data, embed information, and upstream media URLs. |
+| Upstream CDN | Delivers video bytes directly to the Stremio player. |
+
+## Content disclaimer
+
+Pimp Bunny does not host, upload, store, distribute, or control video content. Catalogue metadata
+and stream sources come from [PornAPI](https://pornapi.sbs/). Content availability, quality,
+access permissions, and link lifetime are controlled by that third-party service.
 
 ## Project structure
 
@@ -93,7 +149,7 @@ addon.js         # manifest, PornAPI client, caches, catalog/meta/stream handler
 
 - PornAPI is third-party: content availability, quality and link lifetime are up to them.
 - Stream tokens last roughly 6 hours; the addon refreshes them automatically after ~2 hours.
-- This addon does not host or proxy any video. It only indexes PornAPI metadata.
+- This addon does not host, distribute, or proxy video content. It indexes upstream metadata and returns stream URLs for Stremio.
 - 18+ only. Unofficial project, not affiliated with PornAPI or Stremio.
 
 ## License
