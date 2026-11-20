@@ -1,7 +1,7 @@
 "use strict";
 
 // ===========================================================================
-// PornAPI Stremio addon server
+// Pimp Bunny Stremio addon server
 // ---------------------------------------------------------------------------
 // Serves the Stremio addon protocol, a small landing page and diagnostics.
 // Video bytes are never proxied: Stremio receives the direct MP4 URL from
@@ -52,7 +52,7 @@ app.get("/", (req, res) => {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="robots" content="noindex" />
-  <title>PornAPI · Stremio Addon</title>
+  <title>Pimp Bunny · Stremio Addon</title>
   <link rel="icon" href="https://pornapi.sbs/wp-content/uploads/2026/10/movish_icon-150x150.png" />
   <style>
     :root {
@@ -192,8 +192,8 @@ app.get("/", (req, res) => {
   <div class="wrap">
     <header>
       <div class="brand">
-        <div class="mark">PA</div>
-        <div>PornAPI<small>STREMIO ADDON</small></div>
+        <div class="mark">PB</div>
+        <div>Pimp Bunny<small>STREMIO ADDON</small></div>
       </div>
       <nav>
         <a href="/manifest.json">Manifest</a>
@@ -203,17 +203,17 @@ app.get("/", (req, res) => {
 
     <main class="hero">
       <span class="badge"><span class="dot"></span> v${version} · online</span>
-      <h1>135,000+ videos,<br /><span>right inside Stremio</span></h1>
+      <h1>Watch your favourites,<br /><span>right inside Stremio</span></h1>
       <p class="lede">
-        Browse new releases, top tags, studios and networks from the PornAPI catalogue and
-        play every title in the Stremio player. Direct MP4 streams, no redirects, no proxies.
+        Pimp Bunny brings you the largest collection of your favourite content in one reliable Stremio addon.
+        Browse new releases, curated collections, top tags, studios and networks, then play every title directly in the Stremio player.
       </p>
 
       <ul class="stats">
-        <li>135,831 videos</li>
-        <li>2,451 tags</li>
-        <li>972 channels</li>
-        <li>274 networks</li>
+        <li>Largest collection</li>
+        <li>Reliable streaming</li>
+        <li>Curated catalogs</li>
+        <li>Direct playback</li>
         <li>Up to 4K</li>
       </ul>
 
@@ -240,8 +240,8 @@ app.get("/", (req, res) => {
       <div class="grid">
         <div class="card">
           <div class="icon">▶</div>
-          <h3>Plays in Stremio</h3>
-          <p>Direct MP4 links that Stremio can seek and play natively. Works on desktop, mobile and TV.</p>
+          <h3>One reliable addon</h3>
+          <p>Your favourites in one place, with direct MP4 links that Stremio can seek and play natively.</p>
         </div>
         <div class="card">
           <div class="icon">4K</div>
@@ -255,8 +255,8 @@ app.get("/", (req, res) => {
         </div>
         <div class="card">
           <div class="icon">⚡</div>
-          <h3>Built for rate limits</h3>
-          <p>Catalog, metadata and stream lookups are cached with stale fallbacks, so the API is rarely touched.</p>
+          <h3>Built for reliability</h3>
+          <p>Catalog, metadata and stream lookups are cached with stale fallbacks for a dependable experience.</p>
         </div>
       </div>
     </section>
@@ -270,7 +270,7 @@ app.get("/", (req, res) => {
         </div>
         <div class="step">
           <strong>Paste the manifest</strong>
-          <p>Use the URL above. The addon appears under Video addons as “PornAPI”.</p>
+          <p>Use the URL above. The addon appears under Video addons as “Pimp Bunny”.</p>
         </div>
         <div class="step">
           <strong>Press play</strong>
@@ -280,7 +280,7 @@ app.get("/", (req, res) => {
     </section>
 
     <footer>
-      <span>PornAPI Stremio Addon · v${version} · unofficial, not affiliated with PornAPI or Stremio · 18+ only</span>
+      <span>Pimp Bunny Stremio Addon · v${version} · unofficial, not affiliated with PornAPI or Stremio · 18+ only</span>
       <span><a href="/manifest.json">Manifest</a> · <a href="/health">Health</a></span>
     </footer>
   </div>
@@ -365,7 +365,7 @@ app.use((req, res) => {
 });
 
 const server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`[server] PornAPI addon v${addonInterface.manifest.version} on port ${PORT}`);
+  console.log(`[server] Pimp Bunny addon v${addonInterface.manifest.version} on port ${PORT}`);
   console.log(`[server] Manifest: ${HOST_URL}/manifest.json`);
   console.log(
     `[server] PornAPI key: ${process.env.PORNAPI_KEY ? "configured" : "not set (public, rate-limited mode)"}`

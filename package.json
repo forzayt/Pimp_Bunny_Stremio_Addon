@@ -1,7 +1,7 @@
 {
-  "name": "pornapi-stremio-addon",
+  "name": "pimp-bunny-stremio-addon",
   "version": "2.0.0",
-  "description": "Stremio addon for the PornAPI catalogue: browse, search and stream direct MP4 sources with aggressive server-side caching.",
+  "description": "Pimp Bunny Stremio addon: browse, search and stream direct MP4 sources with aggressive server-side caching.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

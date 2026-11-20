@@ -383,14 +383,34 @@ const CATALOG_DEFS = {
     genreParam: "network",
     ttl: TTL.catalogGenre,
   },
+  pvl_anal: {
+    params: { tag: "Anal", orderby: "release_date", order: "desc" },
+    ttl: TTL.catalogGenre,
+  },
+  pvl_milf: {
+    params: { tag: "MILF", orderby: "release_date", order: "desc" },
+    ttl: TTL.catalogGenre,
+  },
+  pvl_amateur: {
+    params: { tag: "Amateur", orderby: "release_date", order: "desc" },
+    ttl: TTL.catalogGenre,
+  },
+  pvl_lesbian: {
+    params: { tag: "Lesbian", orderby: "release_date", order: "desc" },
+    ttl: TTL.catalogGenre,
+  },
+  pvl_pov: {
+    params: { tag: "POV", orderby: "release_date", order: "desc" },
+    ttl: TTL.catalogGenre,
+  },
 };
 
 const manifest = {
-  id: "org.pornapi.addon",
+  id: "org.pimpbunny.addon",
   version: "2.0.0",
-  name: "PornAPI",
+  name: "Pimp Bunny",
   description:
-    "Browse a catalogue of 135,000+ adult videos and stream them directly in Stremio. Powered by PornAPI.",
+    "Pimp Bunny: the largest collection of adult videos in one reliable Stremio addon. Powered by PornAPI.",
   logo: "https://pornapi.sbs/wp-content/uploads/2026/10/movish_icon-150x150.png",
   resources: ["catalog", "meta", "stream"],
   types: ["movie"],
@@ -402,44 +422,74 @@ const manifest = {
     {
       type: "movie",
       id: "pvl_new",
-      name: "New Releases",
+      name: "Pimp Bunny New Releases",
       extra: [{ name: "skip" }],
     },
     {
       type: "movie",
       id: "pvl_popular",
-      name: "Most Viewed",
+      name: "Pimp Bunny Most Viewed",
       extra: [{ name: "skip" }],
     },
     {
       type: "movie",
       id: "pvl_4k",
-      name: "4K Ultra HD",
+      name: "Pimp Bunny 4K Ultra HD",
       extra: [{ name: "skip" }],
     },
     {
       type: "movie",
       id: "pvl_search",
-      name: "Search",
+      name: "Pimp Bunny Search",
       extra: [{ name: "search", isRequired: true }, { name: "skip" }],
     },
     {
       type: "movie",
       id: "pvl_tags",
-      name: "Tags",
+      name: "Pimp Bunny Tags",
       extra: [{ name: "genre", options: TAG_OPTIONS }, { name: "skip" }],
     },
     {
       type: "movie",
       id: "pvl_studios",
-      name: "Studios",
+      name: "Pimp Bunny Studios",
       extra: [{ name: "genre", options: CHANNEL_OPTIONS }, { name: "skip" }],
     },
     {
       type: "movie",
       id: "pvl_networks",
-      name: "Networks",
+      name: "Pimp Bunny Networks",
       extra: [{ name: "genre", options: NETWORK_OPTIONS }, { name: "skip" }],
+    },
+    {
+      type: "movie",
+      id: "pvl_anal",
+      name: "Pimp Bunny Anal",
+      extra: [{ name: "skip" }],
+    },
+    {
+      type: "movie",
+      id: "pvl_milf",
+      name: "Pimp Bunny MILF",
+      extra: [{ name: "skip" }],
+    },
+    {
+      type: "movie",
+      id: "pvl_amateur",
+      name: "Pimp Bunny Amateur",
+      extra: [{ name: "skip" }],
+    },
+    {
+      type: "movie",
+      id: "pvl_lesbian",
+      name: "Pimp Bunny Lesbian",
+      extra: [{ name: "skip" }],
+    },
+    {
+      type: "movie",
+      id: "pvl_pov",
+      name: "Pimp Bunny POV",
+      extra: [{ name: "skip" }],
     },
   ],
 };
@@ -690,7 +740,7 @@ async function buildStreams(cfg, videoId) {
       candidates.push({
         quality,
         url,
-        name: `PornAPI ${qualityLabel(quality)}`,
+        name: `Pimp Bunny ${qualityLabel(quality)}`,
         title: [duration, cfg.title].filter(Boolean).join(" · "),
         filename: safeFilename(cfg.title, quality),
       });

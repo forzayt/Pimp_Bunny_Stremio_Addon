@@ -1,13 +1,13 @@
-# PornAPI Stremio Addon
+# Pimp Bunny Stremio Addon
 
-A Stremio addon for the [PornAPI](https://pornapi.sbs) catalogue. Browse, search and stream
-135,000+ videos directly in the Stremio player — no browser redirects and no video proxying.
+A Stremio addon for the [PornAPI](https://pornapi.sbs) catalogue. Pimp Bunny brings a large, curated collection to
+one reliable Stremio experience — browse, search and stream favourites directly in the player with no browser redirects or video proxying.
 
 Built with the [Stremio Addon SDK](https://github.com/Stremio/stremio-addon-sdk) and Express.
 
 ## Features
 
-- **7 catalogs**: New Releases, Most Viewed, 4K Ultra HD, Search, Tags, Studios and Networks.
+- **12 catalogs**: New Releases, Most Viewed, 4K Ultra HD, Search, Tags, Studios, Networks, and curated Anal, MILF, Amateur, Lesbian and POV collections.
 - **Filters**: each tag/studio/network catalogue exposes a picker with the most popular entries.
 - **Search**: dedicated search catalog (required query) across the whole catalogue.
 - **Meta**: title, poster/background, description, release year, runtime, tags, cast and studio.
@@ -51,9 +51,9 @@ On Node 20.6+ you can put the key in `.env` (copy `.env.example`) and run `npm r
 
 1. Stremio → **Addons** → **My addons** → **Install community addon**.
 2. Paste `https://your-addon.example.com/manifest.json`.
-3. Open the **PornAPI** addon and pick a catalog.
+3. Open the **Pimp Bunny** addon and pick a catalog.
 
-> The addon id changed to `org.pornapi.addon`. If you still have the old PimpBunny addon
+> The addon id is `org.pimpbunny.addon`. If you still have an earlier install
 > installed, uninstall it once and install this manifest.
 
 ## Endpoints
