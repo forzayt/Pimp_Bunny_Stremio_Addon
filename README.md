@@ -6,7 +6,6 @@ Built on the [Stremio Addon SDK](https://github.com/Stremio/stremio-addon-sdk) a
 
 ## Features
 
-
 - **Catalogs**: "Popular" + one catalog per pimpbunny category (Anal, Blowjob, Lesbian, MILF, Teen, etc.)
 - **Search**: every catalog supports a search query
 - **Pagination**: scroll down to load more videos (page 2, 3, etc.) — works on category and search catalogs. Uses Stremio's `extra.skip` offset to fetch the correct page of results.
