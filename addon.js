@@ -1,380 +1,804 @@
+"use strict";
+
+// ===========================================================================
+// PornAPI Stremio addon
+// ---------------------------------------------------------------------------
+// Catalogue + metadata come from the PornAPI REST API. Direct MP4 URLs are
+// extracted from the API's embed page (the API itself only exposes an iframe).
+//
+// Every upstream call is cached aggressively because the API is rate limited
+// per IP/key. Stream tokens are valid for ~6 hours, so cached direct URLs are
+// served for at most 2.5 hours before a fresh embed page is requested.
+// ===========================================================================
+
 const { addonBuilder } = require("stremio-addon-sdk");
-const axios = require("axios");
-const cheerio = require("cheerio");
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
-const BASE = "https://pimpbunny.com";
+const PORNAPI_BASE = (
+  process.env.PORNAPI_BASE || "https://pornapi.sbs/wp-json/video-library/v1"
+).replace(/\/+$/, "");
+const PORNAPI_EMBED_BASE = (process.env.PORNAPI_EMBED_BASE || "https://pornapi.sbs").replace(
+  /\/+$/,
+  ""
+);
+const PORNAPI_KEY = (process.env.PORNAPI_KEY || "").trim();
+const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-const headers = {
-  "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-  Accept:
-    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9",
-  Referer: BASE + "/",
+const API_TIMEOUT_MS = 15000;
+const EMBED_TIMEOUT_MS = 15000;
+
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+// Cache TTLs (fresh window, then optional stale window for upstream failures)
+const TTL = {
+  catalogNew: 10 * MINUTE,
+  catalogPopular: 30 * MINUTE,
+  catalog4k: 30 * MINUTE,
+  catalogGenre: 3 * HOUR,
+  search: 12 * HOUR,
+  meta: 24 * HOUR,
+  metaStale: 30 * DAY,
+  stream: 2 * HOUR,
+  streamStale: 30 * MINUTE,
+  stats: 10 * MINUTE,
 };
 
-// Public base of this addon (for self-referencing URLs if needed).
-const HOST_URL = (
-  process.env.HOST_URL ||
-  process.env.RENDER_EXTERNAL_URL ||
-  `http://localhost:${process.env.PORT || 7000}`
-).replace(/\/+$/, "");
-
-// Server-side caches keep repeated Stremio catalog/meta requests from hitting
-// the source site. Streams are deliberately excluded: their v-acctoken URLs
-// are signed and may expire long before a day has passed.
-const cache = new Map();
-const catalogCache = new Map();
-const metaCache = new Map();
-const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
-
-function readCache(store, key, ttl = CACHE_TTL) {
-  const cached = store.get(key);
-  if (!cached || Date.now() - cached.t >= ttl) return null;
-  return cached.d;
-}
-
-function writeCache(store, key, data) {
-  store.set(key, { d: data, t: Date.now() });
-  return data;
-}
-
-async function fetchHtml(u, ttl = CACHE_TTL) {
-  const c = cache.get(u);
-  if (ttl > 0 && c && Date.now() - c.t < ttl) return c.d;
-  const { data } = await axios.get(u, {
-    headers,
-    timeout: 25000,
-    maxRedirects: 5,
-  });
-  if (ttl > 0) cache.set(u, { d: data, t: Date.now() });
-  return data;
-}
-
-function $load(html) {
-  return cheerio.load(html);
-}
+const CATALOG_PAGE_SIZE = 100; // Stremio asks for 100 items per page
+const API_MAX_PER_PAGE = 100;
 
 // ---------------------------------------------------------------------------
-// URL helpers
+// Curated taxonomy (real PornAPI slugs, ordered by video count)
 // ---------------------------------------------------------------------------
-function videoUrl(slug) {
-  return `${BASE}/videos/${slug}/`;
-}
-function catUrl(slug, page) {
-  return page > 1 ? `${BASE}/categories/${slug}/${page}/` : `${BASE}/categories/${slug}/`;
-}
-function searchUrl(q, page) {
-  const base = `${BASE}/search/${encodeURIComponent(q)}/`;
-  return page > 1 ? `${base}${page}/` : base;
-}
+const TAG_OPTIONS = [
+  "Blowjob", "Brunette", "4K", "Blonde", "Shaved", "Big Tits", "Deepthroat",
+  "Pussy Licking", "Tattoo", "Facial", "Doggystyle", "Big Cock", "Cumshot",
+  "HD", "Natural Tits", "Cowgirl", "Missionary", "Small Tits", "Handjob",
+  "Reverse Cowgirl", "Anal", "POV", "Big Ass", "MILF", "Piercing",
+  "Masturbation", "Hardcore", "European", "Teen", "Spanking", "Amateur",
+  "Interracial", "High Heels", "Athletic", "Trimmed", "Short Hair", "Lesbian",
+  "Sex Toys", "Kissing", "Lingerie",
+];
 
-function slugFromHref(href) {
-  const m = String(href).match(/\/videos\/([^\/]+)\/?/);
-  return m ? m[1] : null;
-}
+const CHANNEL_OPTIONS = [
+  "Brazzers", "Wow Girls", "Mature.nl", "Club Sweethearts", "SEXMEX", "BANG.com",
+  "SexArt", "Lustery", "We Are Hairy", "New Sensations", "RK Prime", "MYLF",
+  "Team Skeet X Series", "Tainster", "Porn World", "Private", "Girls Out West",
+  "Hot Guys Fuck", "Aunt Judys", "Czech Casting", "Babes.com", "Nubile Films",
+  "Passion HD", "Rocco Siffredi", "Digital Playground", "HardX", "Joymii",
+  "FTV Girls",
+];
 
-// ---------------------------------------------------------------------------
-// Categories (from pimpbunny.com/categories/)
-// ---------------------------------------------------------------------------
-const CATEGORIES = [
-  ["bbc", "BBC"],
-  ["anal", "Anal"],
-  ["deep-throat", "Deep Throat"],
-  ["bdsm", "BDSM"],
-  ["bizarre", "Bizarre"],
-  ["double-penetration", "Double Penetration"],
-  ["feet", "Feet"],
-  ["fetish", "Fetish"],
-  ["gang-bang", "Gang Bang"],
-  ["lesbian", "Lesbian"],
-  ["outdoor", "Outdoor"],
-  ["masturbation", "Masturbation"],
-  ["threesome", "Threesome"],
-  ["blowjob", "Blowjob"],
-  ["sex", "Sex"],
-  ["striptease", "Striptease"],
-  ["seduction", "Seduction"],
-  ["pawg", "PAWG"],
-  ["bunnies", "Bunnies"],
-  ["big-boobs", "Big Boobs"],
-  ["exclusive", "Exclusive"],
-  ["4k", "4K"],
-  ["cosplay", "Cosplay"],
-  ["asian", "Asian"],
-  ["big-beautiful-women", "Big Beautiful Women"],
-  ["milf", "MILF"],
-  ["latina", "Latina"],
-  ["teen", "Teen"],
-  ["bwc", "BWC"],
-  ["petite", "Petite"],
+const NETWORK_OPTIONS = [
+  "Adult Time", "Team Skeet", "Brazzers", "Reality Kings", "Bangbros",
+  "AdultPrime", "PornPros", "Naughty America", "MYLF", "Wow Porn", "Porn Box",
+  "Nubiles Porn", "DDF Network", "FakeHub", "TUSHY", "Mature.nl", "Sexy Hub",
+  "BANG.com", "SEXMEX", "MetArt", "XEmpire", "Lustery", "MOFOS", "FEMJOY",
 ];
 
 // ---------------------------------------------------------------------------
-// Parse video entries from category / homepage / search page
+// Small helpers
 // ---------------------------------------------------------------------------
-async function parseVideoList(html) {
-  const $ = $load(html);
-  const metas = [];
-  const seen = new Set();
+function log(...args) {
+  console.log("[pornapi]", ...args);
+}
 
-  // Collect video links in DOM order
-  const videoEntries = [];
-  $("a.ui-card-link__KxRw6l").each((_, a) => {
-    const $a = $(a);
-    const href = $a.attr("href");
-    const slug = slugFromHref(href);
-    if (!slug || seen.has(slug)) return;
-    seen.add(slug);
+function warn(...args) {
+  console.warn("[pornapi]", ...args);
+}
 
-    const title =
-      $a.attr("title") ||
-      $a.find("img").attr("alt") ||
-      $a.text().trim() ||
-      `Video ${slug}`;
+function posterOf(item) {
+  const poster = item && item.poster;
+  if (!poster) return "";
+  if (typeof poster === "string") return poster;
+  return poster.local_url || poster.url || "";
+}
 
-    videoEntries.push({ slug, title });
-  });
+function formatRuntime(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (!total) return undefined;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.round((total % 3600) / 60);
+  if (hours && minutes) return `${hours}h ${minutes}min`;
+  if (hours) return `${hours}h`;
+  return `${minutes}min`;
+}
 
-  // Collect poster screenshot URLs in DOM order (from data-original attribute)
-  const posterUrls = [];
-  $("img[data-original*='videos_screenshots']").each((_, img) => {
-    const src = $(img).attr("data-original");
-    if (src && src.startsWith("http") && !posterUrls.includes(src)) {
-      posterUrls.push(src);
-    }
-  });
+function qualityRank(quality) {
+  const value = String(quality || "");
+  if (/^4k$/i.test(value)) return 2160;
+  const match = value.match(/(\d{3,4})/);
+  return match ? parseInt(match[1], 10) : 0;
+}
 
-  // Match posters to videos by order
-  for (let i = 0; i < videoEntries.length; i++) {
-    const entry = videoEntries[i];
-    const poster = posterUrls[i] || "";
+function qualityLabel(quality) {
+  const value = String(quality || "");
+  if (/^4k$/i.test(value)) return "4K";
+  return value;
+}
 
-    metas.push({
-      id: `pb:${entry.slug}`,
-      type: "movie",
-      name: entry.title,
-      poster,
-      description: "",
-    });
-  }
+function safeFilename(name, quality) {
+  const base = String(name || "video")
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 110);
+  return `${base || "video"} [${qualityLabel(quality)}].mp4`;
+}
 
-  console.log(`[pimpbunny] parseVideoList -> ${metas.length} videos found`);
-  return metas;
+function numericId(id) {
+  const match = /^(?:pvl:)?(\d+)$/.exec(String(id || ""));
+  return match ? match[1] : null;
 }
 
 // ---------------------------------------------------------------------------
-// Parse a single video page -> title, poster, description, streams
+// TTL cache with in-flight coalescing, stale-on-error and simple LRU bounds
 // ---------------------------------------------------------------------------
-// Stream URLs look like:
-// https://pimpbunny.com/get_file/49/<hash>/<bucket>/<id>/<id>_720p.mp4/
-// https://pimpbunny.com/get_file/49/<hash>/<bucket>/<id>/<id>_360p.mp4/?v-acctoken=...
-const REGEX_STREAM = /https:\/\/[^"'\s<>]*?get_file[^"'\s<>]*?\.mp4[^"'\s<>]*/gi;
-const REGEX_QUALITY = /_(\d+p)\.mp4/i;
+const cache = new Map(); // key -> { value, freshUntil, staleUntil }
+const inflight = new Map(); // key -> Promise
+const MAX_CACHE_ENTRIES = 3000;
 
-async function parseVideoPage(slug) {
-  // Do not cache pages used to extract stream URLs. They contain signed tokens.
-  const html = await fetchHtml(videoUrl(slug), 0);
-  const $ = $load(html);
+function touchCache(key, entry) {
+  cache.delete(key);
+  cache.set(key, entry);
 
-  // --- Title ---
-  let title =
-    $("meta[property='og:title']").attr("content") ||
-    $("title")
-      .text()
-      .replace(/\| PimpBunny$/i, "")
-      .trim() ||
-    "PimpBunny Video";
+  if (cache.size <= MAX_CACHE_ENTRIES) return;
 
-  // --- Poster ---
-  let poster =
-    $("meta[property='og:image']").attr("content") ||
-    $("meta[name='twitter:image']").attr("content") ||
-    "";
+  const now = Date.now();
+  for (const [k, v] of cache) {
+    if (v.staleUntil <= now) cache.delete(k);
+    if (cache.size <= MAX_CACHE_ENTRIES) return;
+  }
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    cache.delete(cache.keys().next().value);
+  }
+}
 
-  // --- Description ---
-  const desc =
-    $("meta[property='og:description']").attr("content") ||
-    $("meta[name='description']").attr("content") ||
-    "";
+function cacheSet(key, value, ttl, stale = 0) {
+  const now = Date.now();
+  touchCache(key, { value, freshUntil: now + ttl, staleUntil: now + ttl + stale });
+  return value;
+}
 
-  // --- Streams ---
-  const streamUrls = (html.match(REGEX_STREAM) || []).filter(
-    (u) => !u.includes("_preview.mp4") && !u.includes("_pb_preview.mp4")
-  );
+async function cached(key, { ttl, stale = 0, loader }) {
+  const now = Date.now();
+  const hit = cache.get(key);
+  if (hit && now < hit.freshUntil) {
+    touchCache(key, hit);
+    return hit.value;
+  }
 
-  const sources = {};
-  for (const url of streamUrls) {
-    const qm = url.match(REGEX_QUALITY);
-    const quality = qm ? qm[1] : "SD";
-    // Prefer URL with v-acctoken; otherwise keep first seen
-    const existing = sources[quality];
-    if (
-      !existing ||
-      (url.includes("v-acctoken") && !existing.includes("v-acctoken"))
-    ) {
-      sources[quality] = url;
+  // One upstream request per key, even under concurrent Stremio requests.
+  if (inflight.has(key)) {
+    try {
+      return await inflight.get(key);
+    } catch (error) {
+      if (hit && now < hit.staleUntil) {
+        warn(`serving stale cache for ${key}: ${error.message}`);
+        return hit.value;
+      }
+      throw error;
     }
   }
 
-  const streams = Object.entries(sources).map(([quality, url]) => ({
-    title: quality,
-    // Proxy through this addon so Stremio never hits pimpbunny.com directly
-    // (avoids CORS / strict-origin-when-cross-origin errors).
-    url: `${HOST_URL}/proxy/stream?url=${encodeURIComponent(url)}`,
-  }));
+  const promise = (async () => {
+    const value = await loader();
+    cacheSet(key, value, ttl, stale);
+    return value;
+  })();
 
-  console.log(
-    `[pimpbunny] parseVideoPage ${slug} -> title="${title}" streams=${streams.length}`
-  );
-  return { title, poster, desc, streams };
+  inflight.set(key, promise);
+  try {
+    return await promise;
+  } catch (error) {
+    if (hit && now < hit.staleUntil) {
+      warn(`serving stale cache for ${key}: ${error.message}`);
+      return hit.value;
+    }
+    throw error;
+  } finally {
+    inflight.delete(key);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Manifest
+// Rate-limit tracking
 // ---------------------------------------------------------------------------
+const rateLimit = {
+  limit: null,
+  remaining: null,
+  reset: null,
+  seenAt: 0,
+};
+let blockedUntil = 0;
+let lastApiError = null;
+
+function noteRateLimit(response) {
+  const limit = Number(response.headers.get("x-ratelimit-limit"));
+  const remaining = Number(response.headers.get("x-ratelimit-remaining"));
+  const reset = Number(response.headers.get("x-ratelimit-reset"));
+  if (Number.isFinite(limit) || Number.isFinite(remaining)) {
+    rateLimit.limit = Number.isFinite(limit) ? limit : rateLimit.limit;
+    rateLimit.remaining = Number.isFinite(remaining) ? remaining : rateLimit.remaining;
+    rateLimit.reset = Number.isFinite(reset) ? reset : rateLimit.reset;
+    rateLimit.seenAt = Date.now();
+  }
+}
+
+class UpstreamError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "UpstreamError";
+    this.status = status;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PornAPI client
+// ---------------------------------------------------------------------------
+function queryString(params = {}) {
+  return Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+    .join("&");
+}
+
+async function apiFetch(path, params = {}) {
+  const now = Date.now();
+  if (now < blockedUntil) {
+    throw new UpstreamError(
+      `PornAPI cooldown active for ${Math.ceil((blockedUntil - now) / 1000)}s`,
+      429
+    );
+  }
+
+  const url = `${PORNAPI_BASE}${path}?${queryString(params)}`;
+  const headers = { Accept: "application/json", "User-Agent": USER_AGENT };
+  if (PORNAPI_KEY) headers["X-VL-Key"] = PORNAPI_KEY;
+
+  let response;
+  try {
+    response = await fetch(url, { headers, signal: AbortSignal.timeout(API_TIMEOUT_MS) });
+  } catch (error) {
+    lastApiError = { at: Date.now(), message: error.message, path };
+    throw new UpstreamError(`PornAPI request failed: ${error.message}`, 0);
+  }
+
+  noteRateLimit(response);
+
+  if (response.status === 429) {
+    const retryAfter = Number(response.headers.get("retry-after"));
+    const reset = Number(response.headers.get("x-ratelimit-reset"));
+    let waitMs = 30 * 1000;
+    if (Number.isFinite(retryAfter) && retryAfter > 0) {
+      waitMs = retryAfter * 1000;
+    } else if (Number.isFinite(reset) && reset > 0) {
+      waitMs = Math.max(1000, reset * 1000 - Date.now());
+    }
+    blockedUntil = Date.now() + Math.min(waitMs, 10 * MINUTE);
+    lastApiError = { at: Date.now(), message: "rate limited (429)", path };
+    throw new UpstreamError("PornAPI rate limit reached (429)", 429);
+  }
+
+  if (!response.ok) {
+    lastApiError = {
+      at: Date.now(),
+      message: `${response.status} ${response.statusText}`,
+      path,
+    };
+    throw new UpstreamError(
+      `PornAPI ${response.status} ${response.statusText} for ${path}`,
+      response.status
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new UpstreamError(`PornAPI returned invalid JSON for ${path}`, response.status);
+  }
+}
+
+function getApi(path, params, { ttl, stale = 0 } = {}) {
+  const key = `api:${path}?${queryString(params)}`;
+  return cached(key, { ttl, stale, loader: () => apiFetch(path, params) });
+}
+
+// ---------------------------------------------------------------------------
+// Mapping PornAPI records to Stremio objects
+// ---------------------------------------------------------------------------
+function toMeta(item) {
+  const poster = posterOf(item);
+  const tags = Array.isArray(item.tags) ? item.tags : [];
+  const actors = Array.isArray(item.actors)
+    ? item.actors.map((actor) => actor && actor.name).filter(Boolean)
+    : [];
+  const studio = (item.channel && item.channel.name) || (item.network && item.network.name) || "";
+
+  const meta = {
+    id: `pvl:${item.id}`,
+    type: "movie",
+    name: item.title || `Video ${item.id}`,
+    poster,
+    background: poster,
+    description: item.description || "",
+    genres: tags.slice(0, 8),
+  };
+
+  if (actors.length) meta.cast = actors.slice(0, 12);
+  const runtime = formatRuntime(item.duration_seconds);
+  if (runtime) meta.runtime = runtime;
+  if (studio) meta.director = [studio];
+
+  if (item.release_date) {
+    const date = new Date(item.release_date);
+    if (!Number.isNaN(date.getTime())) meta.releaseInfo = String(date.getUTCFullYear());
+  }
+
+  return meta;
+}
+
+function toCatalogMeta(item) {
+  const meta = toMeta(item);
+  // Catalog previews need less data; trim to keep responses small.
+  delete meta.cast;
+  delete meta.director;
+  delete meta.runtime;
+  return meta;
+}
+
+// ---------------------------------------------------------------------------
+// Catalog definitions
+// ---------------------------------------------------------------------------
+const CATALOG_DEFS = {
+  pvl_new: {
+    params: { orderby: "release_date", order: "desc" },
+    ttl: TTL.catalogNew,
+  },
+  pvl_popular: {
+    params: { orderby: "views", order: "desc" },
+    ttl: TTL.catalogPopular,
+  },
+  pvl_4k: {
+    params: { has_4k: "1", orderby: "release_date", order: "desc" },
+    ttl: TTL.catalog4k,
+  },
+  pvl_tags: {
+    params: { orderby: "release_date", order: "desc" },
+    genreParam: "tag",
+    ttl: TTL.catalogGenre,
+  },
+  pvl_studios: {
+    params: { orderby: "release_date", order: "desc" },
+    genreParam: "channel",
+    ttl: TTL.catalogGenre,
+  },
+  pvl_networks: {
+    params: { orderby: "release_date", order: "desc" },
+    genreParam: "network",
+    ttl: TTL.catalogGenre,
+  },
+};
+
 const manifest = {
-  id: "org.pimpbunny.addon",
-  version: "1.0.0",
-  name: "PimpBunny",
+  id: "org.pornapi.addon",
+  version: "2.0.0",
+  name: "PornAPI",
   description:
-    "Browse and stream videos from pimpbunny.com. Categories, qualities and streams are auto-fetched from the site.",
-  logo: "https://pimpbunny.com/static/v2/images/popup/age-verification/age-verification.png",
+    "Browse a catalogue of 135,000+ adult videos and stream them directly in Stremio. Powered by PornAPI.",
+  logo: "https://pornapi.sbs/wp-content/uploads/2026/10/movish_icon-150x150.png",
   resources: ["catalog", "meta", "stream"],
   types: ["movie"],
-  idPrefixes: ["pb:"],
+  idPrefixes: ["pvl:"],
+  behaviorHints: {
+    adult: true,
+  },
   catalogs: [
     {
       type: "movie",
-      id: "pimpbunny_popular",
-      name: "Popular",
-      extra: [{ name: "search", isRequired: false }, { name: "skip" }],
+      id: "pvl_new",
+      name: "New Releases",
+      extra: [{ name: "skip" }],
     },
-    ...CATEGORIES.map(([slug, name]) => ({
+    {
       type: "movie",
-      id: `pimpbunny_cat_${slug}`,
-      name,
-      extra: [{ name: "search", isRequired: false }, { name: "skip" }],
-    })),
+      id: "pvl_popular",
+      name: "Most Viewed",
+      extra: [{ name: "skip" }],
+    },
+    {
+      type: "movie",
+      id: "pvl_4k",
+      name: "4K Ultra HD",
+      extra: [{ name: "skip" }],
+    },
+    {
+      type: "movie",
+      id: "pvl_search",
+      name: "Search",
+      extra: [{ name: "search", isRequired: true }, { name: "skip" }],
+    },
+    {
+      type: "movie",
+      id: "pvl_tags",
+      name: "Tags",
+      extra: [{ name: "genre", options: TAG_OPTIONS }, { name: "skip" }],
+    },
+    {
+      type: "movie",
+      id: "pvl_studios",
+      name: "Studios",
+      extra: [{ name: "genre", options: CHANNEL_OPTIONS }, { name: "skip" }],
+    },
+    {
+      type: "movie",
+      id: "pvl_networks",
+      name: "Networks",
+      extra: [{ name: "genre", options: NETWORK_OPTIONS }, { name: "skip" }],
+    },
   ],
 };
 
 const builder = new addonBuilder(manifest);
 
 // ---------------------------------------------------------------------------
-// Catalog handler
+// Catalogue handler
 // ---------------------------------------------------------------------------
-builder.defineCatalogHandler(async ({ type, id, extra }) => {
+async function collectVideos(params, skip, limit, ttl) {
+  let page = Math.floor(skip / CATALOG_PAGE_SIZE) + 1;
+  let offset = skip % CATALOG_PAGE_SIZE;
+  const collected = [];
+  let guard = 0;
+
+  while (collected.length < limit && guard < 4) {
+    guard += 1;
+    const data = await getApi(
+      "/videos",
+      {
+        ...params,
+        page,
+        per_page: API_MAX_PER_PAGE,
+        view: "summary",
+      },
+      { ttl, stale: ttl }
+    );
+
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (!items.length) break;
+
+    const wanted = limit - collected.length;
+    collected.push(...items.slice(offset, offset + wanted));
+    offset = 0;
+
+    if (!data.pagination || !data.pagination.has_next) break;
+    page += 1;
+  }
+
+  return collected.slice(0, limit);
+}
+
+async function collectSearch(query, skip, limit) {
+  let page = Math.floor(skip / CATALOG_PAGE_SIZE) + 1;
+  let offset = skip % CATALOG_PAGE_SIZE;
+  const collected = [];
+  let guard = 0;
+
+  while (collected.length < limit && guard < 4) {
+    guard += 1;
+    const data = await getApi(
+      "/search",
+      { q: query, page, per_page: API_MAX_PER_PAGE },
+      { ttl: TTL.search, stale: TTL.search }
+    );
+
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (!items.length) break;
+
+    const wanted = limit - collected.length;
+    collected.push(...items.slice(offset, offset + wanted));
+    offset = 0;
+
+    if (!data.pagination || !data.pagination.has_next) break;
+    page += 1;
+  }
+
+  return collected.slice(0, limit);
+}
+
+function rememberItems(items) {
+  // Catalog responses already carry enough metadata for a meta view. Keeping a
+  // copy avoids an extra API request when the user opens a video.
+  for (const item of items) {
+    if (!item || item.id === undefined) continue;
+    cacheSet(`seed:${item.id}`, toMeta(item), TTL.meta, TTL.metaStale);
+  }
+}
+
+builder.defineCatalogHandler(async ({ type, id, extra = {} }) => {
   if (type !== "movie") return { metas: [] };
-  const search = extra && extra.search ? String(extra.search) : null;
-  const requestedSkip = extra && extra.skip ? parseInt(extra.skip, 10) : 0;
-  const skip = Number.isFinite(requestedSkip) && requestedSkip > 0 ? requestedSkip : 0;
-  // Stremio paginates catalogs with `skip` offsets (normally 100 items). The
-  // upstream site exposes 32 entries per page, so translate that offset below.
-  const UPSTREAM_PAGE_SIZE = 32;
-  const CATALOG_PAGE_SIZE = 100;
-  const cacheKey = JSON.stringify({ id, skip, search: search || "" });
-  const cached = readCache(catalogCache, cacheKey);
-  if (cached) return cached;
+
+  const skip = Math.max(0, parseInt(extra.skip, 10) || 0);
+  const genre = typeof extra.genre === "string" ? extra.genre.trim() : "";
 
   try {
-    if (id === "pimpbunny_popular") {
-      // Homepage does not paginate — return only the first batch.
-      if (skip > 0) return { metas: [] };
-      const url = search ? searchUrl(search) : BASE + "/";
-      const html = await fetchHtml(url);
-      const metas = await parseVideoList(html);
-      console.log(`[pimpbunny] catalog ${id} -> ${metas.length} metas`);
-      return writeCache(catalogCache, cacheKey, { metas });
+    if (id === "pvl_search") {
+      const query = typeof extra.search === "string" ? extra.search.trim() : "";
+      if (!query) return { metas: [] };
+      const items = await collectSearch(query, skip, CATALOG_PAGE_SIZE);
+      rememberItems(items);
+      log(`search "${query}" skip=${skip} -> ${items.length} results`);
+      return { metas: items.map(toCatalogMeta), cacheMaxAge: 3600 };
     }
 
-    const m = id.match(/^pimpbunny_cat_(.+)$/);
-    if (m) {
-      const slug = m[1];
-      // Return a full Stremio page. Starting at the exact source offset keeps
-      // pages contiguous even though PimpBunny pages contain only 32 entries.
-      const firstUpstreamPage = Math.floor(skip / UPSTREAM_PAGE_SIZE) + 1;
-      const offsetInFirstPage = skip % UPSTREAM_PAGE_SIZE;
-      const upstreamPageCount = Math.ceil(
-        (offsetInFirstPage + CATALOG_PAGE_SIZE) / UPSTREAM_PAGE_SIZE
-      );
-      const pages = Array.from(
-        { length: upstreamPageCount },
-        (_, index) => firstUpstreamPage + index
-      );
-      const results = await Promise.all(
-        pages.map((page) =>
-          fetchHtml(search ? searchUrl(search, page) : catUrl(slug, page)).then(
-            parseVideoList
-          )
-        )
-      );
-      const seen = new Set();
-      const metas = results
-        .flat()
-        .filter((meta) => !seen.has(meta.id) && seen.add(meta.id))
-        .slice(offsetInFirstPage, offsetInFirstPage + CATALOG_PAGE_SIZE);
-      console.log(
-        `[pimpbunny] catalog ${id} pages=${pages.join(",")} skip=${skip} -> ${metas.length} metas`
-      );
-      return writeCache(catalogCache, cacheKey, { metas });
-    }
-  } catch (e) {
-    console.error(`[pimpbunny] Catalog ${id} error:`, e.message);
+    const def = CATALOG_DEFS[id];
+    if (!def) return { metas: [] };
+
+    const params = { ...def.params };
+    if (genre && def.genreParam) params[def.genreParam] = genre;
+
+    const items = await collectVideos(params, skip, CATALOG_PAGE_SIZE, def.ttl);
+    rememberItems(items);
+    log(`catalog ${id} genre="${genre}" skip=${skip} -> ${items.length} items`);
+    return { metas: items.map(toCatalogMeta), cacheMaxAge: 600 };
+  } catch (error) {
+    warn(`catalog ${id} failed: ${error.message}`);
+    return { metas: [] };
   }
-  return { metas: [] };
 });
 
 // ---------------------------------------------------------------------------
 // Meta handler
 // ---------------------------------------------------------------------------
+function getMeta(videoId) {
+  // Prefer the catalog seed: it is complete enough and costs no API call.
+  return cached(`seed:${videoId}`, {
+    ttl: TTL.meta,
+    stale: TTL.metaStale,
+    loader: async () => {
+      const item = await getApi(`/videos/${videoId}`, {}, { ttl: TTL.meta, stale: TTL.metaStale });
+      return toMeta(item);
+    },
+  });
+}
+
 builder.defineMetaHandler(async ({ type, id }) => {
   if (type !== "movie") return { meta: null };
-  const m = id.match(/^pb:(.+)$/);
-  if (!m) return { meta: null };
-  const slug = m[1];
-  const cached = readCache(metaCache, id);
-  if (cached) return cached;
+  const videoId = numericId(id);
+  if (!videoId) return { meta: null };
 
   try {
-    const { title, poster, desc } = await parseVideoPage(slug);
-    console.log(`[pimpbunny] meta ${id} -> "${title}"`);
-    return writeCache(metaCache, id, {
-      meta: {
-        id,
-        type: "movie",
-        name: title,
-        poster,
-        background: poster,
-        description: desc || "Video from pimpbunny.com",
-      }
-    });
-  } catch (e) {
-    console.error(`[pimpbunny] Meta ${id} error:`, e.message);
+    return { meta: await getMeta(videoId), cacheMaxAge: 86400 };
+  } catch (error) {
+    warn(`meta ${id} failed: ${error.message}`);
     return { meta: null };
   }
 });
 
 // ---------------------------------------------------------------------------
-// Stream handler
+// Embed page parsing -> direct MP4 streams
 // ---------------------------------------------------------------------------
+function extractCfg(html) {
+  const marker = html.indexOf("var CFG");
+  if (marker === -1) throw new Error("CFG block not found in embed page");
+
+  const equals = html.indexOf("=", marker);
+  const start = html.indexOf("{", equals);
+  if (start === -1) throw new Error("CFG object not found in embed page");
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < html.length; index += 1) {
+    const char = html[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return JSON.parse(html.slice(start, index + 1));
+      }
+    }
+  }
+
+  throw new Error("CFG object is unterminated");
+}
+
+async function fetchEmbedPage(videoId) {
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const cacheBuster = `${Date.now()}${attempt}`;
+    const url = `${PORNAPI_EMBED_BASE}/?vl_embed=${encodeURIComponent(videoId)}&_cb=${cacheBuster}`;
+    try {
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        },
+        signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
+        redirect: "follow",
+      });
+      if (!response.ok) throw new Error(`embed page ${response.status}`);
+      const html = await response.text();
+      if (!html) throw new Error("embed page was empty");
+      return html;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`embed fetch failed: ${lastError ? lastError.message : "unknown error"}`);
+}
+
+async function probeStream(url, deadline) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (Date.now() > deadline) break;
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": USER_AGENT, Range: "bytes=0-1" },
+        signal: AbortSignal.timeout(2500),
+      });
+      const contentRange = response.headers.get("content-range") || "";
+      const sizeMatch = /\/(\d+)\s*$/.exec(contentRange);
+      const contentType = response.headers.get("content-type") || "";
+      const ok = response.status === 206 || (response.status === 200 && /video\//i.test(contentType));
+      if (response.body) {
+        try {
+          await response.body.cancel();
+        } catch {
+          /* the connection is already gone */
+        }
+      }
+      if (ok) return { ok: true, size: sizeMatch ? Number(sizeMatch[1]) : null };
+    } catch {
+      /* transient CDN error, try again */
+    }
+  }
+  return { ok: false, size: null };
+}
+
+async function buildStreams(cfg, videoId) {
+  const sources = cfg && cfg.sources && typeof cfg.sources === "object" ? cfg.sources : {};
+  const duration = formatRuntime(cfg && cfg.duration);
+  const candidates = [];
+  const seen = new Set();
+
+  const qualities = Object.keys(sources)
+    .filter((quality) => Array.isArray(sources[quality]) && sources[quality].length)
+    .sort((a, b) => qualityRank(b) - qualityRank(a));
+
+  for (const quality of qualities) {
+    for (const source of sources[quality]) {
+      const url = source && typeof source.d === "string" ? source.d : "";
+      // The API's CDN is HTTPS-only; ignore anything else.
+      if (!/^https:\/\//i.test(url) || seen.has(url)) continue;
+      seen.add(url);
+
+      candidates.push({
+        quality,
+        url,
+        name: `PornAPI ${qualityLabel(quality)}`,
+        title: [duration, cfg.title].filter(Boolean).join(" · "),
+        filename: safeFilename(cfg.title, quality),
+      });
+      break; // one mirror per quality is enough
+    }
+  }
+
+  if (!candidates.length) throw new Error(`no playable sources for video ${videoId}`);
+
+  // The CDN occasionally answers the first byte-range request with a transient
+  // 502. Probe each quality once and put reachable ones first so the default
+  // pick is the most likely to play; unreachable ones stay as fallbacks.
+  const deadline = Date.now() + 5500;
+  const probes = await Promise.all(candidates.map((candidate) => probeStream(candidate.url, deadline)));
+  const ordered = candidates.map((candidate, index) => ({ ...candidate, ...probes[index] }));
+  const reachable = probes.filter((probe) => probe.ok).length;
+
+  ordered.sort((a, b) => Number(b.ok) - Number(a.ok));
+
+  log(`stream ${videoId} -> ${ordered.length} qualities, ${reachable} reachable`);
+  return ordered.map((stream) => ({
+    name: stream.name,
+    title: stream.title,
+    url: stream.url,
+    behaviorHints: {
+      filename: stream.filename,
+      ...(stream.size ? { videoSize: stream.size } : {}),
+    },
+  }));
+}
+
+function getStreams(videoId) {
+  return cached(`stream:${videoId}`, {
+    ttl: TTL.stream,
+    stale: TTL.streamStale,
+    loader: async () => {
+      const html = await fetchEmbedPage(videoId);
+      const cfg = extractCfg(html);
+      return buildStreams(cfg, videoId);
+    },
+  });
+}
+
 builder.defineStreamHandler(async ({ type, id }) => {
   if (type !== "movie") return { streams: [] };
-  const m = id.match(/^pb:(.+)$/);
-  if (!m) return { streams: [] };
-  const slug = m[1];
+  const videoId = numericId(id);
+  if (!videoId) return { streams: [] };
 
   try {
-    const { streams } = await parseVideoPage(slug);
-    console.log(`[pimpbunny] stream ${id} -> ${streams.length} streams`);
-    return { streams };
-  } catch (e) {
-    console.error(`[pimpbunny] Stream ${id} error:`, e.message);
+    return { streams: await getStreams(videoId), cacheMaxAge: 7200 };
+  } catch (error) {
+    warn(`stream ${id} failed: ${error.message}`);
     return { streams: [] };
   }
 });
 
-module.exports = builder.getInterface();
+// ---------------------------------------------------------------------------
+// Diagnostics exposed to server.js
+// ---------------------------------------------------------------------------
+function cacheStats() {
+  const now = Date.now();
+  let fresh = 0;
+  let stale = 0;
+  for (const entry of cache.values()) {
+    if (now < entry.freshUntil) fresh += 1;
+    else if (now < entry.staleUntil) stale += 1;
+  }
+  return {
+    entries: cache.size,
+    fresh,
+    stale,
+    inflight: inflight.size,
+    maxEntries: MAX_CACHE_ENTRIES,
+  };
+}
+
+function stats() {
+  return {
+    configured: Boolean(PORNAPI_KEY),
+    base: PORNAPI_BASE,
+    rateLimit: { ...rateLimit },
+    blockedForSeconds:
+      blockedUntil > Date.now() ? Math.ceil((blockedUntil - Date.now()) / 1000) : 0,
+    lastApiError,
+    cache: cacheStats(),
+  };
+}
+
+async function health() {
+  const result = {
+    upstream: { ok: false, totalVideos: null, lastUpdated: null, error: null },
+    api: stats(),
+  };
+  try {
+    const data = await getApi("/stats", {}, { ttl: TTL.stats, stale: TTL.stats });
+    result.upstream.ok = true;
+    result.upstream.totalVideos = data.total_videos ?? null;
+    result.upstream.lastUpdated = data.last_updated ?? null;
+  } catch (error) {
+    result.upstream.error = error.message;
+  }
+  return result;
+}
+
+const addonInterface = builder.getInterface();
+addonInterface.stats = stats;
+addonInterface.health = health;
+addonInterface.getMeta = getMeta;
+addonInterface.getStreams = getStreams;
+
+module.exports = addonInterface;

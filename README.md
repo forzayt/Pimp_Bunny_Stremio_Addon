@@ -1,74 +1,101 @@
-# PimpBunny Stremio Addon
+# PornAPI Stremio Addon
 
-A clean Stremio addon that lists and streams videos from **pimpbunny.com** — free, no API key, no proxy, no third-party scraping.
+A Stremio addon for the [PornAPI](https://pornapi.sbs) catalogue. Browse, search and stream
+135,000+ videos directly in the Stremio player — no browser redirects and no video proxying.
 
-Built on the [Stremio Addon SDK](https://github.com/Stremio/stremio-addon-sdk) and modeled on the working demos [MalluFlix_stremio_addon](https://github.com/forzayt/MalluFlix_stremio_addon) and [kick_Streams_Addon_Stremio](https://github.com/forzayt/kick_Streams_Addon_Stremio).
+Built with the [Stremio Addon SDK](https://github.com/Stremio/stremio-addon-sdk) and Express.
 
 ## Features
 
-- **Catalogs**: "Popular" + one catalog per pimpbunny category (Anal, Blowjob, Lesbian, MILF, Teen, etc.)
-- **Search**: every catalog supports a search query
-- **Pagination**: scroll down to load more videos (page 2, 3, etc.) — works on category and search catalogs. Uses Stremio's `extra.skip` offset to fetch the correct page of results.
-- **Meta**: title, poster, background, description
-- **Streams**: one stream per video quality (360p, 720p, 1080p, 1440p, etc.) with direct MP4 URLs
-- **Seekable proxied stream URLs** — the addon forwards PimpBunny's required
-  referrer and player byte-range requests, avoiding browser CORS restrictions.
-- If the addon host cannot reach PimpBunny, it can retry through
-  `https://corsproxy.io/`. Set `CORS_PROXY_URL` to another compatible relay or
-  to an empty value to disable that fallback.
+- **7 catalogs**: New Releases, Most Viewed, 4K Ultra HD, Search, Tags, Studios and Networks.
+- **Filters**: each tag/studio/network catalogue exposes a picker with the most popular entries.
+- **Search**: dedicated search catalog (required query) across the whole catalogue.
+- **Meta**: title, poster/background, description, release year, runtime, tags, cast and studio.
+- **Streams**: one direct MP4 stream per available quality (4K, 720p, 480p, …), seekable and
+  playable natively in Stremio on desktop, mobile and TV.
+- **Cache-first**: catalog, metadata, search and stream lookups are cached server-side with
+  stale-on-error fallback, so the rate-limited PornAPI is hit as little as possible.
+- **No bandwidth cost**: video bytes go straight from PornAPI's CDN to the player; this server
+  only returns metadata and URLs.
 
-## Install & run locally
+## Quick start
 
 ```bash
-# 1. Install dependencies
 npm install
-
-# 2. Start the addon
-npm start
-# Addon runs on http://localhost:7000
-# Manifest: http://localhost:7000/manifest.json
+PORNAPI_KEY=your-key npm start
+# windows: $env:PORNAPI_KEY="your-key"; npm start
 ```
 
-### Deploy
-Deploy to any Node host (Render, Railway, Fly, VPS, etc.). Optional:
+The addon listens on `http://localhost:7000`; the manifest is at
+`http://localhost:7000/manifest.json`.
 
-```
-HOST_URL=https://your-addon.example.com
-PORT=7000
-```
+On Node 20.6+ you can put the key in `.env` (copy `.env.example`) and run `npm run start:env`.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORNAPI_KEY` | — | PornAPI key, sent as `X-VL-Key`. Required for production. |
+| `PORNAPI_BASE` | `https://pornapi.sbs/wp-json/video-library/v1` | REST API base URL. |
+| `PORNAPI_EMBED_BASE` | `https://pornapi.sbs` | Base for the `?vl_embed=` player page. |
+| `HOST_URL` | `RENDER_EXTERNAL_URL` or `http://localhost:PORT` | Public URL used on the landing page. |
+| `PORT` | `7000` | HTTP port. |
+
+## Deploy (Render)
+
+1. Point the Render service at this repository (build: `npm install`, start: `npm start`).
+2. Add `PORNAPI_KEY` under **Environment**.
+3. Keep `HOST_URL` unset; Render's `RENDER_EXTERNAL_URL` is picked up automatically.
 
 ## Install in Stremio
 
-1. Open Stremio → **Addons** → **My addons** → **Install community addon** (or "Add URL")
-2. Enter your manifest URL:
-   - Local: `http://localhost:7000/manifest.json`
-   - Deployed: `https://your-addon.example.com/manifest.json`
-3. Enable the addon. "PimpBunny" appears under **Video addons** with its catalogs.
+1. Stremio → **Addons** → **My addons** → **Install community addon**.
+2. Paste `https://your-addon.example.com/manifest.json`.
+3. Open the **PornAPI** addon and pick a catalog.
+
+> The addon id changed to `org.pornapi.addon`. If you still have the old PimpBunny addon
+> installed, uninstall it once and install this manifest.
+
+## Endpoints
+
+| Route | Description |
+| --- | --- |
+| `GET /manifest.json` | Stremio addon manifest. |
+| `GET /catalog/movie/:id.json` | Catalog pages (`skip`, `genre`, `search` extras). |
+| `GET /meta/movie/pvl:ID.json` | Video metadata. |
+| `GET /stream/movie/pvl:ID.json` | Direct MP4 streams. |
+| `GET /health` | Upstream reachability, rate-limit headers and cache stats. |
+| `GET /debug/video/ID` | Resolved meta + streams for a video (debugging). |
+
+## How it works
+
+1. **Catalog / search** → cached PornAPI `/videos` and `/search` responses, mapped to Stremio
+   metas. Catalog pages are cached for 10 minutes to 3 hours depending on the catalog.
+2. **Meta** → served from the catalog seed when possible, otherwise `/videos/{id}`, cached for
+   24 hours (stale for 30 days).
+3. **Streams** → the API only exposes an iframe, so the addon fetches the `?vl_embed=` page,
+   parses its `CFG.sources` block and returns the direct `*.workers.dev/...mp4` URLs.
+   URLs are cached for 2 hours (tokens live ~6 hours), so repeated plays do not reload the embed.
+4. **Rate limits** → `x-ratelimit-*` headers are tracked and a `429` engages a cooldown window
+   based on `Retry-After` / `x-ratelimit-reset`; cached (even slightly stale) data keeps serving
+   in the meantime.
 
 ## Project structure
 
 ```
-package.json        # dependencies (stremio-addon-sdk, axios, cheerio, express)
-server.js           # Express server + Stremio SDK router
-addon.js            # manifest + catalog / meta / stream handlers + pimpbunny scrapers
-.gitignore
-README.md
+package.json     # dependencies and scripts
+server.js        # Express server, landing page, /health and /debug routes
+addon.js         # manifest, PornAPI client, caches, catalog/meta/stream handlers
+.env.example     # environment template
 ```
-
-## How it works
-
-- **Catalog handler** fetches the pimpbunny homepage (Popular) or one category page at a time (`/categories/<slug>/<page>/`), parses `.ui-card-video` nodes and returns video metas. Uses Stremio's `extra.skip` to fetch the next page when you scroll.
-- **Meta handler** fetches the video page (`/videos/<slug>/`), parses Open Graph tags for title/poster/description.
-- **Stream handler** fetches the video page, extracts `get_file` MP4 URLs for each quality (360p, 720p, 1080p, 1440p, etc.), and returns one stream per quality.
 
 ## Notes
 
-- pimpbunny.com is scraped directly. If the site changes its HTML structure, the selectors in `addon.js` may need updating.
-- Streams are served through the addon's `/proxy/stream` route. This preserves
-  the upstream `Referer` header and forwards `Range` requests so seeking works.
-- This addon only indexes pimpbunny.com videos. It does not host any content.
-- Category and search catalogs support infinite scroll (pagination) — Stremio will load more videos as you scroll down.
+- PornAPI is third-party: content availability, quality and link lifetime are up to them.
+- Stream tokens last roughly 6 hours; the addon refreshes them automatically after ~2 hours.
+- This addon does not host or proxy any video. It only indexes PornAPI metadata.
+- 18+ only. Unofficial project, not affiliated with PornAPI or Stremio.
 
 ## License
 
-MIT. pimpbunny.com content remains subject to pimpbunny.com's own terms.
+MIT.
